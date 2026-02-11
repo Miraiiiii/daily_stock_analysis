@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- Web UI: manual analysis input now supports comma-separated stock codes, up to 3 per submission.
+
 所有重要更改都会记录在此文件中。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，

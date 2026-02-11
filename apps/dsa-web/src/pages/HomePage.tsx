@@ -11,6 +11,8 @@ import { HistoryList } from '../components/history';
 import { TaskPanel } from '../components/tasks';
 import { useTaskStream } from '../hooks';
 
+const MAX_STOCK_CODES = 3;
+
 /**
  * 首页 - 单页设计
  * 顶部输入 + 左侧历史 + 右侧报告
@@ -170,10 +172,30 @@ const HomePage: React.FC = () => {
 
   // 分析股票（异步模式）
   const handleAnalyze = async () => {
-    const { valid, message, normalized } = validateStockCode(stockCode);
-    if (!valid) {
-      setInputError(message);
+    const stockCodes = stockCode
+      .replace(/，/g, ',')
+      .split(',')
+      .map((code) => code.trim().toUpperCase())
+      .filter(Boolean);
+
+    if (stockCodes.length === 0) {
+      setInputError('请输入股票代码');
       return;
+    }
+
+    if (stockCodes.length > MAX_STOCK_CODES) {
+      setInputError(`最多支持同时分析 ${MAX_STOCK_CODES} 个股票代码`);
+      return;
+    }
+
+    const normalizedCodes: string[] = [];
+    for (const code of stockCodes) {
+      const { valid, message, normalized } = validateStockCode(code);
+      if (!valid) {
+        setInputError(stockCodes.length === 1 ? message : `${code}: ${message}`);
+        return;
+      }
+      normalizedCodes.push(normalized);
     }
 
     setInputError(undefined);
@@ -187,18 +209,41 @@ const HomePage: React.FC = () => {
 
     try {
       // 使用异步模式提交分析
-      const response = await analysisApi.analyzeAsync({
-        stockCode: normalized,
-        reportType: 'detailed',
-      });
+      const duplicateCodes: string[] = [];
+      let submittedCount = 0;
 
       // 清空输入框
+      for (const code of normalizedCodes) {
+        if (currentRequestId !== analysisRequestIdRef.current) {
+          return;
+        }
+
+        try {
+          const response = await analysisApi.analyzeAsync({
+            stockCode: code,
+            reportType: 'detailed',
+          });
+          submittedCount += 1;
+          console.log('Task submitted:', response.taskId, code);
+        } catch (err) {
+          if (err instanceof DuplicateTaskError) {
+            duplicateCodes.push(err.stockCode);
+            continue;
+          }
+          throw err;
+        }
+      }
+
       if (currentRequestId === analysisRequestIdRef.current) {
-        setStockCode('');
+        if (submittedCount > 0) {
+          setStockCode('');
+        }
+        if (duplicateCodes.length > 0) {
+          setDuplicateError(`Stocks ${duplicateCodes.join(', ')} are already being analyzed`);
+        }
       }
 
       // 任务已提交，SSE 会推送更新
-      console.log('Task submitted:', response.taskId);
     } catch (err) {
       console.error('Analysis failed:', err);
       if (currentRequestId === analysisRequestIdRef.current) {
@@ -217,7 +262,7 @@ const HomePage: React.FC = () => {
 
   // 回车提交
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && stockCode && !isAnalyzing) {
+    if (e.key === 'Enter' && stockCode.trim() && !isAnalyzing) {
       handleAnalyze();
     }
   };
@@ -236,7 +281,7 @@ const HomePage: React.FC = () => {
                 setInputError(undefined);
               }}
               onKeyDown={handleKeyDown}
-              placeholder="输入股票代码，如 600519、00700、AAPL"
+              placeholder="输入股票代码，使用逗号分隔，最多 3 个（如 600519,00700,AAPL）"
               disabled={isAnalyzing}
               className={`input-terminal w-full ${inputError ? 'border-danger/50' : ''}`}
             />
@@ -250,7 +295,7 @@ const HomePage: React.FC = () => {
           <button
             type="button"
             onClick={handleAnalyze}
-            disabled={!stockCode || isAnalyzing}
+            disabled={!stockCode.trim() || isAnalyzing}
             className="btn-primary flex items-center gap-1.5 whitespace-nowrap"
           >
             {isAnalyzing ? (
