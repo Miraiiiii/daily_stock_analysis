@@ -1,0 +1,91 @@
+name: WebUI Only Check
+
+on:
+  workflow_dispatch:
+    inputs:
+      host:
+        description: Host for the WebUI service
+        required: true
+        default: 127.0.0.1
+      port:
+        description: Port for the WebUI service
+        required: true
+        default: "8000"
+      startup_timeout:
+        description: Seconds to wait for health check
+        required: true
+        default: "60"
+
+concurrency:
+  group: webui-only-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  run-webui-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Start and verify WebUI-only mode
+        env:
+          GITHUB_ACTIONS: "false"
+          HOST: ${{ github.event.inputs.host || '127.0.0.1' }}
+          PORT: ${{ github.event.inputs.port || '8000' }}
+          STARTUP_TIMEOUT: ${{ github.event.inputs.startup_timeout || '60' }}
+        run: |
+          set -euo pipefail
+          mkdir -p logs
+
+          echo "Starting: python main.py --webui-only --host ${HOST} --port ${PORT}"
+          python main.py --webui-only --host "${HOST}" --port "${PORT}" > logs/webui-only.log 2>&1 &
+          APP_PID=$!
+
+          cleanup() {
+            if kill -0 "${APP_PID}" 2>/dev/null; then
+              kill "${APP_PID}" || true
+            fi
+            wait "${APP_PID}" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          READY=0
+          for _ in $(seq 1 "${STARTUP_TIMEOUT}"); do
+            if curl -fsS "http://${HOST}:${PORT}/api/health" > logs/webui-only-health.json; then
+              READY=1
+              break
+            fi
+            sleep 1
+          done
+
+          if [ "${READY}" -ne 1 ]; then
+            echo "WebUI did not become healthy within ${STARTUP_TIMEOUT}s."
+            tail -n 200 logs/webui-only.log || true
+            exit 1
+          fi
+
+          echo "Health check passed:"
+          cat logs/webui-only-health.json
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: webui-only-logs-${{ github.run_number }}
+          path: logs/
+          retention-days: 14
